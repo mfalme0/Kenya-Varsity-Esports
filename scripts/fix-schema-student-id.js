@@ -52,20 +52,26 @@ async function fixSchema() {
         console.log('⏳ Waiting for attribute to be available (this may take a moment)...');
         await new Promise(resolve => setTimeout(resolve, 3000)); // Simple wait, robust way is polling
 
-        // 3. Create Unique Index
+        // 3. (Legacy) Create a non-unique lookup index for "studentId".
+        //    NOTE: We intentionally do NOT create a global unique index on
+        //    studentId, because that blocks a student from entering multiple
+        //    tournaments. Uniqueness is now enforced per tournament via the
+        //    composite index created by
+        //    scripts/fix-tournament-registration-student-id-index.js
+        //    (`unique_tournament_studentId` on tournamentId + studentId).
         try {
-            console.log('🔍 Creating unique index for "studentId"...');
+            console.log('🔍 Creating non-unique lookup index for "studentId"...');
             await databases.createIndex(
                 DB_ID,
                 COLLECTION_ID,
-                'unique_studentId', // key
-                'unique',          // type
+                'studentId_lookup', // key
+                'key',             // type (non-unique)
                 ['studentId']      // attributes
             );
             console.log('✅ Index creation initiated.');
         } catch (error) {
              if (error.code === 409) {
-                console.log('ℹ️ Index "unique_studentId" already exists.');
+                console.log('ℹ️ Index "studentId_lookup" already exists.');
             } else {
                 console.warn(`⚠️ Failed to create index: ${error.message}`);
             }

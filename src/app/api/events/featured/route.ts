@@ -223,6 +223,7 @@ export async function GET() {
         registrationLink: `/tournament-registration`,
         isExternal: false,
         ...ticketInfo,
+        ticketStartingPrice: ticketInfo.startingPrice,
       };
     }
 

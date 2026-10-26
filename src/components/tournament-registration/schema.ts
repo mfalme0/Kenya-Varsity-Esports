@@ -29,7 +29,7 @@ const createGameSpecificSchema = (game: Game) => {
       switch (field.type) {
         case 'text':
           fields[field.name] = field.required 
-            ? z.string().min(1, `${field.label} is required`)
+            ? z.string().trim().min(1, `${field.label} is required`)
             : z.string().optional();
           break;
         case 'select':
@@ -40,9 +40,10 @@ const createGameSpecificSchema = (game: Game) => {
           }
           break;
         case 'number':
+          // Form inputs always produce strings; coerce so numbers validate.
           fields[field.name] = field.required 
-            ? z.number().min(1, `${field.label} is required`)
-            : z.number().optional();
+            ? z.coerce.number({ message: `${field.label} is required` }).min(1, `${field.label} is required`)
+            : z.coerce.number().optional();
           break;
       }
     }
@@ -51,85 +52,58 @@ const createGameSpecificSchema = (game: Game) => {
   return z.object(fields);
 };
 
+export interface TournamentRegistrationSchemaOptions {
+  /** The captain's student ID, used to reject duplicate roster entries. */
+  captainStudentId?: string;
+}
+
 // Dynamic form schema based on game rules
-export const createTournamentRegistrationSchema = (game: Game) => {
+export const createTournamentRegistrationSchema = (
+  game: Game,
+  options: TournamentRegistrationSchemaOptions = {}
+) => {
   const isIndividual = game.rules.tournamentType === 'individual';
-  const isDuo = game.rules.tournamentType === 'duo';
-  
-  // Base schema fields
-  const baseFields: z.ZodRawShape = {
+  const requiredPlayerCount = isIndividual ? 0 : Math.max(0, game.rules.minTeamSize - 1);
+  const maxPlayerCount = isIndividual ? 0 : Math.max(0, game.rules.maxTeamSize - 1);
+  const maxSubstitutes = isIndividual ? 0 : game.rules.maxSubstitutes || 0;
+
+  const schemaFields: z.ZodRawShape = {
     tournamentId: z.string().min(1, 'Tournament selection is required'),
-    teamName: z.string().optional(),
+    teamName: isIndividual
+      ? z.string().optional()
+      : z.string().trim().min(2, 'Team name is required'),
     additionalInfo: z.string().optional(),
+    players: z
+      .array(PlayerInfoSchema)
+      .min(requiredPlayerCount, `At least ${requiredPlayerCount} additional players required`)
+      .max(maxPlayerCount, `Maximum ${maxPlayerCount} additional players allowed`)
+      .default([]),
+    substitutes: z
+      .array(PlayerInfoSchema)
+      .max(maxSubstitutes, `Maximum ${maxSubstitutes} substitutes allowed`)
+      .default([]),
+    gameSpecificFields: createGameSpecificSchema(game).optional().default({}),
   };
 
-  // Add game-specific fields
-  const gameSpecificFields = createGameSpecificSchema(game);
-  
-  // For team-based tournaments, validate players
-  let playersValidation: z.ZodTypeAny = z.undefined().optional();
-  
-  if (!isIndividual) {
-    const requiredPlayerCount = game.rules.minTeamSize - 1; // Excluding captain
-    const maxPlayerCount = game.rules.maxTeamSize - 1; // Excluding captain
-    const maxSubstitutes = game.rules.maxSubstitutes || 0;
-    
-    playersValidation = z.object({
-      players: z.array(PlayerInfoSchema)
-        .min(requiredPlayerCount, `At least ${requiredPlayerCount} additional players required`)
-        .max(maxPlayerCount, `Maximum ${maxPlayerCount} additional players allowed`),
-      substitutes: z.array(PlayerInfoSchema)
-        .max(maxSubstitutes, `Maximum ${maxSubstitutes} substitutes allowed`),
-    }).refine(
-      (data) => {
-        // Check that all players have required fields
-        const allPlayersValid = data.players.every(p => 
-          p.name.trim() !== '' && p.studentId.trim() !== '' && p.university.trim() !== ''
-        );
-        const allSubstitutesValid = data.substitutes.every(s => 
-          s.name.trim() !== '' && s.studentId.trim() !== '' && s.university.trim() !== ''
-        );
-        return allPlayersValid && allSubstitutesValid;
-      },
-      {
-        message: 'All team members must have valid name, student ID, and university',
-        path: ['players']
-      }
-    );
-  }
+  return z.object(schemaFields).superRefine((data, ctx) => {
+    const seen = new Set<string>();
+    const captainId = (options.captainStudentId || '').trim().toLowerCase();
+    if (captainId) seen.add(captainId);
 
-  // Combine all fields
-  const schemaFields: Record<string, z.ZodTypeAny> = {
-    ...baseFields,
-    ...(playersValidation && { teamData: playersValidation }),
-  };
-  
-  // Add game-specific fields
-  if (game.rules.gameSpecificRules?.additionalFields) {
-    for (const field of game.rules.gameSpecificRules.additionalFields) {
-      switch (field.type) {
-        case 'text':
-          schemaFields[field.name] = field.required 
-            ? z.string().min(1, `${field.label} is required`)
-            : z.string().optional();
-          break;
-        case 'select':
-          if (field.required && field.options && field.options.length > 0) {
-            schemaFields[field.name] = z.enum(field.options as [string, ...string[]]);
-          } else if (field.options && field.options.length > 0) {
-            schemaFields[field.name] = z.enum(field.options as [string, ...string[]]).optional();
-          }
-          break;
-        case 'number':
-          schemaFields[field.name] = field.required 
-            ? z.number().min(1, `${field.label} is required`)
-            : z.number().optional();
-          break;
+    for (const member of [...data.players, ...data.substitutes]) {
+      const id = member.studentId.trim().toLowerCase();
+      if (!id) continue;
+      if (seen.has(id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['players'],
+          message: 'Student IDs must be unique across the team',
+        });
+        break;
       }
+      seen.add(id);
     }
-  }
-  
-  return z.object(schemaFields);
+  });
 };
 
 // Complete tournament registration form data
@@ -147,9 +121,9 @@ export type TournamentRegistrationFormData = z.infer<typeof TournamentRegistrati
 // Backend payload schema (matches TournamentRegistrationData interface)
 export const TournamentRegistrationPayloadSchema = z.object({
   tournamentId: z.string(),
-  playerName: z.string(),
+  playerName: z.string().min(1),
   email: z.string().email(),
-  studentId: z.string(),
+  studentId: z.string().min(1),
   university: z.string().optional(),
   teamName: z.string().optional(),
   players: z.string().optional(), // JSON string
@@ -157,6 +131,7 @@ export const TournamentRegistrationPayloadSchema = z.object({
   status: z.enum(['pending', 'approved', 'rejected']),
   registrationDate: z.string(),
   userId: z.string(),
+  gameSpecificFields: z.string().optional(),
 });
 
 export type TournamentRegistrationPayload = z.infer<typeof TournamentRegistrationPayloadSchema>;

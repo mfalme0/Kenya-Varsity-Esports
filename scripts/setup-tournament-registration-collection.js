@@ -75,8 +75,8 @@ async function setupCollection() {
         name: 'studentId',
         type: 'string',
         required: true,
-        unique: true,
-        description: 'Captain\'s student ID (UNIQUE - prevents duplicate registrations)'
+        unique: false,
+        description: 'Captain\'s student ID (uniqueness is enforced per tournament via a composite index)'
       },
       {
         name: 'university',
@@ -166,18 +166,25 @@ async function setupCollection() {
     console.log('  2. Navigate to Databases > Your Database');
     console.log('  3. Create a new collection with ID: tournament_registrations');
     console.log('  4. Add each attribute listed above');
-    console.log('  5. Set studentId as UNIQUE INDEX');
-    console.log('  6. Set appropriate permissions\n');
+    console.log('  5. Set studentId as a non-unique attribute');
+    console.log('  6. Create a KEY index on userId (for the applicant status page)');
+    console.log('  7. Create a composite UNIQUE index on (tournamentId, studentId)');
+    console.log('  8. Set permissions:');
+    console.log('     - Read: Role.users()');
+    console.log('     - Create: Role.users()');
+    console.log('     - Update: Role.team("admins")');
+    console.log('     - Delete: Role.team("admins")\n');
 
     console.log('Option B: Using Appwrite Admin SDK');
     console.log('  1. Use the Admin SDK to create collection');
-    console.log('  2. Add attributes programmatically');
-    console.log('  3. Set unique index on studentId\n');
+    console.log('  2. Add attributes programmatically (studentId not unique)');
+    console.log('  3. Create indexes: userId (key), tournamentId+studentId (unique)');
+    console.log('  4. Run the per-tournament student ID index migration\n');
 
     // Step 5: Display migration command
     console.log('📋 Step 5: After Collection Setup\n');
-    console.log('Run the migration script to update existing registrations:');
-    console.log('  npm run migrate:tournament-registration\n');
+    console.log('Run the migration script to scope student ID uniqueness per tournament:');
+    console.log('  node scripts/fix-tournament-registration-student-id-index.js\n');
 
     // Step 6: Verify setup
     if (collectionExists) {
@@ -195,8 +202,10 @@ async function setupCollection() {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     console.log('✨ Setup guide completed!\n');
     console.log('📝 Key Points:');
-    console.log('  • studentId is UNIQUE - prevents duplicate registrations');
-    console.log('  • Each student can only register once across all tournaments');
+    console.log('  • studentId uniqueness is scoped per tournament');
+    console.log('  • A student can register for multiple tournaments');
+    console.log('  • Re-applying after rejection reuses the existing record');
+    console.log('  • Registrations are readable by the owner, writable only by admins');
     console.log('  • Email is retained for contact purposes');
     console.log('  • Players data is stored as JSON for flexibility\n');
 

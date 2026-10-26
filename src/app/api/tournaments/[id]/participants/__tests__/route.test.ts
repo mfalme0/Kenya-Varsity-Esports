@@ -6,11 +6,17 @@
 import { NextRequest } from 'next/server';
 import { GET, POST } from '../route';
 import { participantManagement } from '@/lib/services/participantManagement';
-import { mock, spyOn } from 'bun:test';
+import { mock } from 'bun:test';
 
 // Mock the rate limit module
 mock.module('@/lib/redis-rate-limit', () => ({
   checkRateLimit: () => Promise.resolve(null),
+}));
+
+// Mock the tournament lookup module so tests never hit Appwrite
+const mockGetTournamentForRegistration = mock(() => Promise.resolve({ configured: false, tournament: null }));
+mock.module('@/lib/tournaments/registrationTournament', () => ({
+  getTournamentForRegistration: mockGetTournamentForRegistration,
 }));
 
 // Mock the ticket service so registration tests never hit the database
@@ -38,6 +44,8 @@ describe('/api/tournaments/[id]/participants', () => {
     mockGetTicketPurchaseRequirement.mockImplementation(() => Promise.resolve(defaultTicketRequirement));
     mockHasCheckedInTicketForTournament.mockClear();
     mockHasCheckedInTicketForTournament.mockImplementation(() => Promise.resolve(false));
+    mockGetTournamentForRegistration.mockClear();
+    mockGetTournamentForRegistration.mockImplementation(() => Promise.resolve({ configured: false, tournament: null }));
 
     // Reset all mocks before each test
     mock.module('@/lib/services/participantManagement', () => ({
@@ -493,6 +501,168 @@ describe('/api/tournaments/[id]/participants', () => {
       const data = await response.json();
       expect(data.success).toBe(false);
       expect(data.error).toBe('INTERNAL_ERROR');
+    });
+
+    it('should return 404 when the tournament does not exist', async () => {
+      mockGetTournamentForRegistration.mockImplementation(() =>
+        Promise.resolve({ configured: true, tournament: null })
+      );
+
+      const mockRegister = mock(() => Promise.resolve({ success: true, participant: {} }));
+      mock.module('@/lib/services/participantManagement', () => ({
+        participantManagement: {
+          listByTournament: mock(() => Promise.resolve({})),
+          isRegistered: mock(() => Promise.resolve(false)),
+          register: mockRegister,
+        },
+      }));
+
+      const request = new NextRequest('http://localhost:3000/api/tournaments/test/participants', {
+        method: 'POST',
+        body: JSON.stringify(validPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const response = await POST(request, { params: mockParams });
+
+      expect(response.status).toBe(404);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toBe('TOURNAMENT_NOT_FOUND');
+      expect(mockRegister).not.toHaveBeenCalled();
+    });
+
+    it('should reject registration when registration is not open', async () => {
+      mockGetTournamentForRegistration.mockImplementation(() =>
+        Promise.resolve({
+          configured: true,
+          tournament: { tournamentStatus: 'completed', status: 'published' },
+        })
+      );
+
+      const mockRegister = mock(() => Promise.resolve({ success: true, participant: {} }));
+      mock.module('@/lib/services/participantManagement', () => ({
+        participantManagement: {
+          listByTournament: mock(() => Promise.resolve({})),
+          isRegistered: mock(() => Promise.resolve(false)),
+          register: mockRegister,
+        },
+      }));
+
+      const request = new NextRequest('http://localhost:3000/api/tournaments/test/participants', {
+        method: 'POST',
+        body: JSON.stringify(validPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const response = await POST(request, { params: mockParams });
+
+      expect(response.status).toBe(403);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toBe('TOURNAMENT_NOT_OPEN');
+      expect(mockRegister).not.toHaveBeenCalled();
+    });
+
+    it('should reject registration after the deadline has passed', async () => {
+      mockGetTournamentForRegistration.mockImplementation(() =>
+        Promise.resolve({
+          configured: true,
+          tournament: { tournamentStatus: 'registration_open', status: 'published', registrationDeadline: new Date(Date.now() - 86400000).toISOString() },
+        })
+      );
+
+      const mockRegister = mock(() => Promise.resolve({ success: true, participant: {} }));
+      mock.module('@/lib/services/participantManagement', () => ({
+        participantManagement: {
+          listByTournament: mock(() => Promise.resolve({})),
+          isRegistered: mock(() => Promise.resolve(false)),
+          register: mockRegister,
+        },
+      }));
+
+      const request = new NextRequest('http://localhost:3000/api/tournaments/test/participants', {
+        method: 'POST',
+        body: JSON.stringify(validPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const response = await POST(request, { params: mockParams });
+
+      expect(response.status).toBe(409);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toBe('REGISTRATION_CLOSED');
+      expect(mockRegister).not.toHaveBeenCalled();
+    });
+
+    it('should reject registration when the tournament is full', async () => {
+      mockGetTournamentForRegistration.mockImplementation(() =>
+        Promise.resolve({
+          configured: true,
+          tournament: { tournamentStatus: 'registration_open', status: 'published', maxParticipants: 1 },
+        })
+      );
+      const mockGetActiveCount = mock(() => Promise.resolve(1));
+      mock.module('@/lib/services/participantManagement', () => ({
+        participantManagement: {
+          listByTournament: mock(() => Promise.resolve({})),
+          isRegistered: mock(() => Promise.resolve(false)),
+          register: mock(() => Promise.resolve({ success: true, participant: {} })),
+          getActiveCount: mockGetActiveCount,
+        },
+      }));
+
+      const request = new NextRequest('http://localhost:3000/api/tournaments/test/participants', {
+        method: 'POST',
+        body: JSON.stringify(validPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const response = await POST(request, { params: mockParams });
+
+      expect(response.status).toBe(409);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toBe('TOURNAMENT_FULL');
+    });
+
+    it('should reject an invalid roster for a team tournament', async () => {
+      mockGetTournamentForRegistration.mockImplementation(() =>
+        Promise.resolve({
+          configured: true,
+          tournament: { tournamentStatus: 'registration_open', status: 'published', maxParticipants: 100, gameName: 'PUBG Mobile', slug: 'pubg-mobile' },
+        })
+      );
+      const mockGetActiveCount = mock(() => Promise.resolve(0));
+      mock.module('@/lib/services/participantManagement', () => ({
+        participantManagement: {
+          listByTournament: mock(() => Promise.resolve({})),
+          isRegistered: mock(() => Promise.resolve(false)),
+          register: mock(() => Promise.resolve({ success: true, participant: {} })),
+          getActiveCount: mockGetActiveCount,
+        },
+      }));
+
+      // PUBG requires 3 teammates + captain; this roster has 0 players.
+      const badRosterPayload = {
+        ...validPayload,
+        teamName: 'Bad Team',
+        players: JSON.stringify({ players: [], substitutes: [] }),
+      };
+
+      const request = new NextRequest('http://localhost:3000/api/tournaments/test/participants', {
+        method: 'POST',
+        body: JSON.stringify(badRosterPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const response = await POST(request, { params: mockParams });
+
+      expect(response.status).toBe(400);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toBe('INVALID_ROSTER');
     });
   });
 });
