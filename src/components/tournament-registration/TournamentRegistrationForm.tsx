@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -27,6 +27,10 @@ export interface CMSTournament {
   slug?: string;
   image?: string;
   enableTickets?: boolean;
+  hasTickets?: boolean;
+  ticketStartingPrice?: number;
+  ticketCurrency?: string;
+  ticketTaxRate?: number;
 }
 
 interface TournamentRegistrationFormProps {
@@ -35,6 +39,10 @@ interface TournamentRegistrationFormProps {
   selectedGameSlug?: string;
   tournaments?: CMSTournament[]; // CMS tournaments from API
   onTournamentChange?: (tournament: CMSTournament) => void;
+  /** Pre-select a tournament (e.g. from ?tournament=<id>). */
+  initialTournamentId?: string | null;
+  /** The captain's student ID, used to reject duplicate roster entries. */
+  captainStudentId?: string;
 }
 
 interface FormStep {
@@ -59,28 +67,57 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
   selectedGameSlug,
   tournaments = [], // CMS tournaments from API
   onTournamentChange,
+  initialTournamentId,
+  captainStudentId,
 }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedGame, setSelectedGame] = useState<Game | null>(
     selectedGameSlug ? gamesData[selectedGameSlug] || null : null
   );
   const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // The resolver is created once by useForm, so it must read the current game
+  // and captain ID through refs instead of capturing their initial values.
+  const selectedGameRef = useRef<Game | null>(selectedGame);
+  selectedGameRef.current = selectedGame;
+  const captainStudentIdRef = useRef<string | undefined>(captainStudentId);
+  captainStudentIdRef.current = captainStudentId;
 
   // Initialize form with validation
   const methods = useForm<TournamentRegistrationFormData>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: selectedGame ? zodResolver(createTournamentRegistrationSchema(selectedGame)) as any : undefined,
+    resolver: ((values, context, options) => {
+      const game = selectedGameRef.current;
+      if (!game) {
+        return {
+          values: {},
+          errors: {
+            tournamentId: {
+              type: 'required',
+              message: 'Tournament selection is required',
+            },
+          },
+        } as any;
+      }
+      const schema = createTournamentRegistrationSchema(game, {
+        captainStudentId: captainStudentIdRef.current,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (zodResolver(schema) as any)(values, context, options);
+    }) as any,
     defaultValues: {
       tournamentId: '',
       teamName: '',
       additionalInfo: '',
       players: [],
       substitutes: [],
+      gameSpecificFields: {},
       ...initialData
     }
   });
 
-  const { control, register, handleSubmit, watch, setValue, formState: { errors, isValid }, trigger } = methods;
+  const { control, register, handleSubmit, watch, setValue, setError, clearErrors, formState: { errors } } = methods;
 
   // Handler for tournament selection - finds the game from gamesData based on tournament's gameName
   const handleTournamentSelect = (tournament: CMSTournament) => {
@@ -102,7 +139,21 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
     setValue('players', []);
     setValue('substitutes', []);
     setValue('teamName', '');
+    setValue('gameSpecificFields', {});
+    setSubmitError(null);
   };
+
+  // Pre-select a tournament passed via the URL, once the list is available.
+  useEffect(() => {
+    if (!initialTournamentId || selectedTournamentId) return;
+    const tournament =
+      tournaments.find((entry) => entry.id === initialTournamentId) ||
+      tournaments.find((entry) => entry.slug === initialTournamentId);
+    if (tournament) {
+      handleTournamentSelect(tournament);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTournamentId, tournaments, selectedTournamentId]);
 
   // Helper function to check if game is individual
   const isGameIndividual = (game: Game): boolean => {
@@ -130,9 +181,9 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
       )
     },
     {
-      id: 'team-info',
-      title: 'Team Info',
-      description: 'Team details',
+      id: 'player-info',
+      title: 'Your Info',
+      description: 'Player details',
       component: ({ register, errors, watch, setValue, game }) => (
         <TeamInfoStep
           register={register}
@@ -141,8 +192,7 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
           setValue={setValue}
           game={game}
         />
-      ),
-      shouldShow: (game) => !isGameIndividual(game)
+      )
     },
     {
       id: 'players',
@@ -201,24 +251,76 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
   // Validate current step
   const validateCurrentStep = async (): Promise<boolean> => {
     const currentStepData = visibleSteps[currentStep];
-    
-    if (currentStepData.id === 'tournament') {
-      return await trigger('tournamentId');
+    if (!currentStepData) return false;
+
+    const stepFields: Record<string, string[]> = {
+      tournament: ['tournamentId'],
+      'player-info': ['teamName', 'gameSpecificFields'],
+      players: ['players', 'substitutes'],
+    };
+    const roots = stepFields[currentStepData.id] ?? [];
+
+    // Clear stale field errors for the current step before re-validating.
+    roots.forEach((root) => clearErrors(root as never));
+
+    if (!selectedGame) {
+      setSubmitError('Select a tournament to continue.');
+      return false;
     }
-    
-    if (currentStepData.id === 'team-info' && selectedGame) {
-      if (!isGameIndividual(selectedGame)) {
-        return await trigger(['teamName']);
-      }
+
+    const schema = createTournamentRegistrationSchema(selectedGame, {
+      captainStudentId,
+    });
+    const result = schema.safeParse(methods.getValues());
+    if (result.success) {
+      setSubmitError(null);
+      return true;
     }
-    
+
+    let firstMessage: string | null = null;
+    for (const issue of result.error.issues) {
+      const root = String(issue.path[0] ?? '');
+      if (!roots.includes(root)) continue;
+      if (!firstMessage) firstMessage = issue.message;
+      const name = issue.path.length > 0 ? issue.path.join('.') : root;
+      setError(name as never, { type: 'manual', message: issue.message });
+    }
+
+    if (firstMessage) {
+      setSubmitError(firstMessage);
+      return false;
+    }
+
+    setSubmitError(null);
     return true;
   };
 
   // Handle form submission
   const onFormSubmit = (data: TournamentRegistrationFormData) => {
+    setSubmitError(null);
     onSubmit?.(data);
   };
+
+  const onInvalidSubmit = (formErrors: Record<string, unknown>) => {
+    setSubmitError('Please fix the highlighted fields before submitting.');
+    const keys = Object.keys(formErrors);
+    const targetStepId = keys.some(
+      (key) => key === 'players' || key === 'substitutes' || key.startsWith('players.') || key.startsWith('substitutes.')
+    )
+      ? 'players'
+      : keys.some(
+          (key) =>
+            key === 'teamName' ||
+            key === 'gameSpecificFields' ||
+            key.startsWith('gameSpecificFields.')
+        )
+        ? 'player-info'
+        : 'tournament';
+    const targetIndex = visibleSteps.findIndex((step) => step.id === targetStepId);
+    if (targetIndex >= 0) setCurrentStep(targetIndex);
+  };
+
+  const submitRegistration = handleSubmit(onFormSubmit, onInvalidSubmit);
 
   // Container animations
   const containerVariants = {
@@ -310,6 +412,11 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
 
         {/* Navigation */}
         <div className="px-8 py-6 bg-black border-t border-gray-700">
+          {submitError && (
+            <div className="mb-4 rounded-xl border border-red-700 bg-red-900/40 px-4 py-3 text-sm text-red-200">
+              {submitError}
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <motion.button
               type="button"
@@ -342,12 +449,7 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
             {visibleSteps[currentStep].id === 'review' ? (
               <motion.button
                 type="button"
-                onClick={() => {
-                  // Get form values directly and submit (bypass validation on review step)
-                  const formData = methods.getValues();
-                  console.log('Submitting form data:', formData);
-                  onFormSubmit(formData as TournamentRegistrationFormData);
-                }}
+                onClick={submitRegistration}
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 className="px-8 py-3 font-semibold rounded-xl transition-all duration-300 bg-gradient-to-r from-[#961c18] to-red-600 text-white hover:from-red-700 hover:to-red-800 shadow-lg"
@@ -491,10 +593,17 @@ const TournamentSelectionStep: React.FC<{
                 </div>
 
                 {tournament.enableTickets && (
-                  <div className="mb-3">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/50 text-xs font-bold rounded-full">
                       🎟️ Ticket required
                     </span>
+                    {typeof tournament.ticketStartingPrice === 'number' && (
+                      <span className="text-xs font-semibold text-amber-200">
+                        from {tournament.ticketCurrency || 'KES'}{' '}
+                        {tournament.ticketStartingPrice.toLocaleString()}
+                        {tournament.ticketTaxRate ? ` + ${tournament.ticketTaxRate}% tax` : ''}
+                      </span>
+                    )}
                   </div>
                 )}
                 
@@ -630,7 +739,9 @@ const TeamInfoStep: React.FC<{
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-white mb-2">Team Information</h2>
+        <h2 className="text-2xl font-bold text-white mb-2">
+          {isIndividual ? 'Player Information' : 'Team Information'}
+        </h2>
         <p className="text-gray-400">
           {isIndividual 
             ? "Tell us about yourself" 
@@ -671,33 +782,41 @@ const TeamInfoStep: React.FC<{
         <div className="space-y-4">
           <h3 className="text-lg font-semibold text-white">Game-Specific Information</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {game.rules.gameSpecificRules.additionalFields.map((field, index) => (
-              <div key={field.name} className="space-y-2">
-                <label className="block text-sm font-semibold text-gray-300">
-                  {field.label} {field.required && '*'}
-                </label>
-                {field.type === 'select' ? (
-                  <select
-                    {...register(`gameSpecificFields.${field.name}`)}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-gray-700 focus:outline-none focus:ring-2 focus:ring-[#961c18]/50 transition-all duration-200 font-medium bg-gray-800 text-white"
-                  >
-                    <option value="">Select {field.label}</option>
-                    {field.options?.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    {...register(`gameSpecificFields.${field.name}`)}
-                    type={field.type}
-                    placeholder={`Enter ${field.label.toLowerCase()}`}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-gray-700 focus:outline-none focus:ring-2 focus:ring-[#961c18]/50 transition-all duration-200 font-medium bg-gray-800 text-white placeholder-gray-500"
-                  />
-                )}
-              </div>
-            ))}
+            {game.rules.gameSpecificRules.additionalFields.map((field) => {
+              const fieldError = errors.gameSpecificFields?.[field.name];
+              return (
+                <div key={field.name} className="space-y-2">
+                  <label className="block text-sm font-semibold text-gray-300">
+                    {field.label} {field.required && '*'}
+                  </label>
+                  {field.type === 'select' ? (
+                    <select
+                      {...register(`gameSpecificFields.${field.name}`)}
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-700 focus:outline-none focus:ring-2 focus:ring-[#961c18]/50 transition-all duration-200 font-medium bg-gray-800 text-white"
+                    >
+                      <option value="">Select {field.label}</option>
+                      {field.options?.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      {...register(`gameSpecificFields.${field.name}`)}
+                      type={field.type}
+                      placeholder={`Enter ${field.label.toLowerCase()}`}
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-700 focus:outline-none focus:ring-2 focus:ring-[#961c18]/50 transition-all duration-200 font-medium bg-gray-800 text-white placeholder-gray-500"
+                    />
+                  )}
+                  {fieldError && (
+                    <p className="text-sm text-red-500 font-medium">
+                      {fieldError.message as string}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -760,12 +879,49 @@ const ReviewStep: React.FC<{
         {!isIndividual && (
           <div>
             <h3 className="font-semibold text-white mb-2">Team Members</h3>
-            <div className="text-sm text-gray-400">
-              <p>Players: {formData.players?.length || 0}</p>
-              <p>Substitutes: {formData.substitutes?.length || 0}</p>
+            <div className="text-sm text-gray-300 space-y-1">
+              <p className="text-gray-400">
+                Players: {formData.players?.length || 0} &middot; Substitutes:{' '}
+                {formData.substitutes?.length || 0}
+              </p>
+              {formData.players?.map((player, index) => (
+                <p key={`player-${index}`}>
+                  {player.name} &middot; {player.studentId} &middot; {player.university}
+                </p>
+              ))}
+              {formData.substitutes?.map((player, index) => (
+                <p key={`sub-${index}`} className="text-gray-400">
+                  Sub: {player.name} &middot; {player.studentId}
+                </p>
+              ))}
             </div>
           </div>
         )}
+
+        {/* Game-specific information */}
+        {formData.gameSpecificFields &&
+          Object.entries(formData.gameSpecificFields).filter(
+            ([, value]) => value !== undefined && value !== null && String(value).trim() !== ''
+          ).length > 0 && (
+            <div>
+              <h3 className="font-semibold text-white mb-2">In-Game Information</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-gray-300">
+                {Object.entries(formData.gameSpecificFields)
+                  .filter(
+                    ([, value]) =>
+                      value !== undefined && value !== null && String(value).trim() !== ''
+                  )
+                  .map(([key, value]) => (
+                    <p key={key}>
+                      <span className="text-gray-400 capitalize">
+                        {key.replace(/_/g, ' ')}:
+                      </span>{' '}
+                      {String(value)}
+                    </p>
+                  ))}
+              </div>
+            </div>
+          )}
 
         {/* Additional Info */}
         {formData.additionalInfo && (

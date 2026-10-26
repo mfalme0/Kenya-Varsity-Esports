@@ -228,6 +228,9 @@ export async function GET(request: Request) {
         return {
           ...toEvent(t),
           ...ticketInfo,
+          // Frontend components expect `ticketStartingPrice`; keep `startingPrice`
+          // for the events ticket APIs and add the alias for consistency.
+          ticketStartingPrice: ticketInfo.startingPrice,
           _sortDate: t.startDate || t.$createdAt,
         };
       })

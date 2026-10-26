@@ -259,7 +259,7 @@ export default function EventDetailPage({ params }: { params: Promise<{ eventId:
             {/* Tournament actions */}
             {!event.isExternal && (
               <>
-                <Link href={event.registrationLink || "/tournament-registration"} className="flex-1">
+                <Link href={event.registrationLink ? `${event.registrationLink}?tournament=${event.$id}` : `/tournament-registration?tournament=${event.$id}`} className="flex-1">
                   <div className="w-full text-center py-4 bg-gradient-to-r from-[#8c110d] to-[#b91c17] hover:from-[#b91c17] hover:to-[#8c110d] text-white text-xs font-black uppercase tracking-wider transition-all duration-300 transform hover:shadow-lg hover:shadow-[#8c110d]/50">
                     Register Now
                   </div>

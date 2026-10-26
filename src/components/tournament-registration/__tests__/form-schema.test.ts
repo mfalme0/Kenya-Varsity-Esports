@@ -174,12 +174,9 @@ describe('createTournamentRegistrationSchema', () => {
     const validTeamData = {
       tournamentId: 'tournament-123',
       teamName: 'Test Team',
-      teamData: {
-        players: teamPlayers,
-        substitutes: [],
-      },
-      in_game_id: 'PUBG123456',
-      preferred_server: 'Asia',
+      players: teamPlayers,
+      substitutes: [],
+      gameSpecificFields: { in_game_id: 'PUBG123456', preferred_server: 'Asia' },
     };
 
     const result = schema.safeParse(validTeamData);
@@ -190,49 +187,98 @@ describe('createTournamentRegistrationSchema', () => {
     const schema = createTournamentRegistrationSchema(efootballGame);
     expect(schema).toBeDefined();
 
-    // Test valid individual data
+    // Test valid individual data (no players; game-specific fields collected)
     const validIndividualData = {
       tournamentId: 'tournament-123',
-      in_game_username: 'efootball_user',
-      player_id: 'EFC123456',
-      skill_level: 'Intermediate',
+      players: [],
+      substitutes: [],
+      gameSpecificFields: {
+        in_game_username: 'efootball_user',
+        player_id: 'EFC123456',
+        skill_level: 'Intermediate',
+      },
     };
 
     const result = schema.safeParse(validIndividualData);
     expect(result.success).toBe(true);
   });
 
+  test('should reject players for individual games', () => {
+    const schema = createTournamentRegistrationSchema(efootballGame);
+
+    const invalidIndividualData = {
+      tournamentId: 'tournament-123',
+      players: [validPlayerInfo],
+      gameSpecificFields: { in_game_username: 'user', player_id: 'EFC1', skill_level: 'Beginner' },
+    };
+
+    const result = schema.safeParse(invalidIndividualData);
+    expect(result.success).toBe(false);
+  });
+
   test('should require minimum players for team games', () => {
     const schema = createTournamentRegistrationSchema(pubgGame);
-    
-    // Test with insufficient players
+
+    // Test with insufficient players (PUBG needs 3 teammates + captain = 4 total)
     const insufficientTeamData = {
       tournamentId: 'tournament-123',
-      teamData: {
-        players: [], // Need 3 players for PUBG (4 total - 1 captain)
-        substitutes: [],
-      },
+      teamName: 'Test Team',
+      players: [],
+      substitutes: [],
     };
 
     const result = schema.safeParse(insufficientTeamData);
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some(issue => 
+      expect(result.error.issues.some((issue) =>
         issue.message.includes('At least 3 additional players required')
       )).toBe(true);
     }
   });
 
+  test('should reject duplicate student IDs across the team', () => {
+    const schema = createTournamentRegistrationSchema(pubgGame, {
+      captainStudentId: 'STU001',
+    });
+
+    const duplicateData = {
+      tournamentId: 'tournament-123',
+      teamName: 'Test Team',
+      players: [
+        { name: 'Player 2', studentId: 'STU002', university: 'Uni A' },
+        { name: 'Player 3', studentId: 'STU001', university: 'Uni B' }, // Duplicate with captain
+      ],
+      substitutes: [],
+    };
+
+    const result = schema.safeParse(duplicateData);
+    expect(result.success).toBe(false);
+  });
+
+  test('should require team name for team games', () => {
+    const schema = createTournamentRegistrationSchema(pubgGame);
+
+    const missingTeamName = {
+      tournamentId: 'tournament-123',
+      teamName: '',
+      players: teamPlayers,
+      substitutes: [],
+    };
+
+    const result = schema.safeParse(missingTeamName);
+    expect(result.success).toBe(false);
+  });
+
   test('should validate game-specific required fields', () => {
     const schema = createTournamentRegistrationSchema(pubgGame);
-    
+
     // Test missing required game-specific fields
     const missingFieldsData = {
       tournamentId: 'tournament-123',
-      teamData: {
-        players: teamPlayers,
-        substitutes: [],
-      },
+      teamName: 'Test Team',
+      players: teamPlayers,
+      substitutes: [],
+      gameSpecificFields: {},
     };
 
     const result = schema.safeParse(missingFieldsData);
@@ -281,12 +327,10 @@ describe('Utility functions', () => {
     
     const validData = {
       tournamentId: 'tournament-123',
-      teamData: {
-        players: teamPlayers,
-        substitutes: [],
-      },
-      in_game_id: 'PUBG123456',
-      preferred_server: 'Asia',
+      teamName: 'Test Team',
+      players: teamPlayers,
+      substitutes: [],
+      gameSpecificFields: { in_game_id: 'PUBG123456', preferred_server: 'Asia' },
     };
     
     const result = validator.validate(validData);
@@ -403,25 +447,21 @@ describe('Utility functions', () => {
     
     const validDuoData = {
       tournamentId: 'tournament-123',
-      platform: 'PlayStation 5',
-      ea_account: 'ea_user123',
-      teamData: {
-        players: [teamPlayers[0]], // 1 player (2 total - 1 captain)
-        substitutes: [],
-      },
+      teamName: 'Duo Squad',
+      players: [teamPlayers[0]], // 1 player (2 total - 1 captain)
+      substitutes: [],
+      gameSpecificFields: { platform: 'PlayStation 5', ea_account: 'ea_user123' },
     };
     
     expect(duoSchema.safeParse(validDuoData).success).toBe(true);
     
-    // Test with too many players for duo
+    // Test with too many players for duo (max 1 teammate + captain = 2 total)
     const tooManyPlayers = {
       tournamentId: 'tournament-123',
-      platform: 'PlayStation 5',
-      ea_account: 'ea_user123',
-      teamData: {
-        players: teamPlayers.slice(0, 2), // 2 players (3 total - 1 captain) - too many
-        substitutes: [],
-      },
+      teamName: 'Duo Squad',
+      players: teamPlayers.slice(0, 2), // 2 players (3 total - 1 captain) - too many
+      substitutes: [],
+      gameSpecificFields: { platform: 'PlayStation 5', ea_account: 'ea_user123' },
     };
     
     expect(duoSchema.safeParse(tooManyPlayers).success).toBe(false);
@@ -437,18 +477,15 @@ describe('Schema integration tests', () => {
       tournamentId: 'tournament-pubg-123',
       teamName: 'Elite Squad',
       additionalInfo: 'Ready for competition',
-      teamData: {
-        players: [
-          { name: 'Player 2', studentId: 'STU002', university: 'Uni A', inGameId: 'player2' },
-          { name: 'Player 3', studentId: 'STU003', university: 'Uni B', inGameId: 'player3' },
-          { name: 'Player 4', studentId: 'STU004', university: 'Uni C', inGameId: 'player4' },
-        ],
-        substitutes: [
-          { name: 'Sub 1', studentId: 'SUB001', university: 'Uni D', inGameId: 'sub1' },
-        ],
-      },
-      in_game_id: 'CAPTAIN123',
-      preferred_server: 'Asia',
+      players: [
+        { name: 'Player 2', studentId: 'STU002', university: 'Uni A', inGameId: 'player2' },
+        { name: 'Player 3', studentId: 'STU003', university: 'Uni B', inGameId: 'player3' },
+        { name: 'Player 4', studentId: 'STU004', university: 'Uni C', inGameId: 'player4' },
+      ],
+      substitutes: [
+        { name: 'Sub 1', studentId: 'SUB001', university: 'Uni D', inGameId: 'sub1' },
+      ],
+      gameSpecificFields: { in_game_id: 'CAPTAIN123', preferred_server: 'Asia' },
     };
     
     const result = schema.safeParse(completeRegistration);
@@ -461,12 +498,12 @@ describe('Schema integration tests', () => {
     
     const incompleteRegistration = {
       tournamentId: 'tournament-pubg-123',
-      teamData: {
-        players: [
-          { name: '', studentId: '', university: '' }, // Invalid player
-        ],
-      },
-      // Missing required game-specific fields
+      teamName: '',
+      players: [
+        { name: '', studentId: '', university: '' }, // Invalid player
+      ],
+      substitutes: [],
+      gameSpecificFields: {},
     };
     
     const result = schema.safeParse(incompleteRegistration);

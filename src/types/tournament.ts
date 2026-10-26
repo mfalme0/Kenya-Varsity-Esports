@@ -22,6 +22,12 @@ export interface Tournament {
   prizePool?: number;
   currency?: string;
   enableTickets?: boolean;
+  /** Set by the API when `?includeTickets=true` — entry-fee ticket config exists. */
+  hasTickets?: boolean;
+  /** Starting ticket price (base, before tax/service fee). */
+  ticketStartingPrice?: number;
+  ticketCurrency?: string;
+  ticketTaxRate?: number;
   rules?: string[];
   requirements?: string[];
   rulesTitle?: string;
