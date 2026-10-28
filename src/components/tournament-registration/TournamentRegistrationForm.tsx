@@ -87,7 +87,7 @@ export const TournamentRegistrationForm: React.FC<TournamentRegistrationFormProp
   // Initialize form with validation
   const methods = useForm<TournamentRegistrationFormData>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: ((values, context, options) => {
+    resolver: ((values: TournamentRegistrationFormData, context: any, options: any) => {
       const game = selectedGameRef.current;
       if (!game) {
         return {

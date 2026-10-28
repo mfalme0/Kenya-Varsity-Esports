@@ -1,11 +1,11 @@
 import { Databases, ID, Query } from 'node-appwrite';
 import { getAdminClient } from './appwrite-server';
 
-const DB_ID = process.env.NEXT_PUBLIC_APPWRITE_DB_ID!;
-const BLOG_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_BLOG_POSTS_COLLECTION_ID!;
+const DB_ID = process.env.NEXT_PUBLIC_APPWRITE_DB_ID || '';
+const BLOG_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_BLOG_POSTS_COLLECTION_ID || '';
 
 if (!BLOG_COLLECTION_ID) {
-  throw new Error('NEXT_PUBLIC_APPWRITE_BLOG_POSTS_COLLECTION_ID environment variable is not set. Please add it to your .env.local or Vercel environment variables.');
+  console.warn('NEXT_PUBLIC_APPWRITE_BLOG_POSTS_COLLECTION_ID environment variable is not set. Blog features will be disabled.');
 }
 
 export interface BlogPost {

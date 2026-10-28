@@ -90,7 +90,11 @@ export const createTournamentRegistrationSchema = (
     const captainId = (options.captainStudentId || '').trim().toLowerCase();
     if (captainId) seen.add(captainId);
 
-    for (const member of [...data.players, ...data.substitutes]) {
+    const { players, substitutes } = data as {
+      players: Array<{ studentId: string }>;
+      substitutes: Array<{ studentId: string }>;
+    };
+    for (const member of [...players, ...substitutes]) {
       const id = member.studentId.trim().toLowerCase();
       if (!id) continue;
       if (seen.has(id)) {
