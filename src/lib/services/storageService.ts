@@ -1,16 +1,30 @@
 import { Client, Storage, ID } from 'appwrite';
 
 class StorageService {
-  private client: Client;
-  private storage: Storage;
+  private client: Client | null = null;
+  private storage: Storage | null = null;
   private bucketId = 'season-images'; // Default bucket identified from AdminBannersPage
 
-  constructor() {
-    this.client = new Client()
-      .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!)
-      .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!);
-    
-    this.storage = new Storage(this.client);
+  /**
+   * Lazily create the Appwrite storage client so importing this module does
+   * not require environment variables (e.g. during `next build`).
+   */
+  private getStorage(): Storage {
+    if (!this.storage) {
+      const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
+      const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
+
+      if (!endpoint || !projectId) {
+        throw new Error(
+          'Appwrite is not configured: NEXT_PUBLIC_APPWRITE_ENDPOINT and NEXT_PUBLIC_APPWRITE_PROJECT_ID are required'
+        );
+      }
+
+      this.client = new Client().setEndpoint(endpoint).setProject(projectId);
+      this.storage = new Storage(this.client);
+    }
+
+    return this.storage;
   }
 
   /**
@@ -55,7 +69,7 @@ class StorageService {
    */
   async deleteFile(fileId: string, bucketId: string = this.bucketId): Promise<void> {
     try {
-      await this.storage.deleteFile(bucketId, fileId);
+      await this.getStorage().deleteFile(bucketId, fileId);
     } catch (error) {
       console.error('Error deleting file from Appwrite Storage:', error);
       throw error;

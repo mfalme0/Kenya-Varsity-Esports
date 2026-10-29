@@ -3,25 +3,39 @@ import { Client, Databases, Query } from 'appwrite';
 import { Tournament, TournamentAward } from '@/types/tournament';
 
 class TournamentService {
-  private client: Client;
-  private databases: Databases;
+  private client: Client | null = null;
+  private databases: Databases | null = null;
   private databaseId = process.env.NEXT_PUBLIC_APPWRITE_DB_ID!;
   private tournamentsCollectionId = 'tournaments';
   private awardsCollectionId = 'tournament_awards';
 
-  constructor() {
-    this.client = new Client()
-      .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!)
-      .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!);
-    
-    this.databases = new Databases(this.client);
+  /**
+   * Lazily create the Appwrite client so importing this module does not
+   * require environment variables (e.g. during `next build`).
+   */
+  private getDatabases(): Databases {
+    if (!this.databases) {
+      const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
+      const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
+
+      if (!endpoint || !projectId) {
+        throw new Error(
+          'Appwrite is not configured: NEXT_PUBLIC_APPWRITE_ENDPOINT and NEXT_PUBLIC_APPWRITE_PROJECT_ID are required'
+        );
+      }
+
+      this.client = new Client().setEndpoint(endpoint).setProject(projectId);
+      this.databases = new Databases(this.client);
+    }
+
+    return this.databases;
   }
 
   async getTournamentBySlug(slug: string): Promise<Tournament | null> {
     try {
       console.log(`🔍 Fetching tournament by slug: ${slug}`);
       
-      const response = await this.databases.listDocuments(
+      const response = await this.getDatabases().listDocuments(
         this.databaseId,
         this.tournamentsCollectionId,
         [
@@ -53,7 +67,7 @@ class TournamentService {
     try {
       console.log('🔍 Fetching all published tournaments');
       
-      const response = await this.databases.listDocuments(
+      const response = await this.getDatabases().listDocuments(
         this.databaseId,
         this.tournamentsCollectionId,
         [
@@ -80,7 +94,7 @@ class TournamentService {
 
   async getTournamentAwards(tournamentId: string): Promise<TournamentAward[]> {
     try {
-      const response = await this.databases.listDocuments(
+      const response = await this.getDatabases().listDocuments(
         this.databaseId,
         this.awardsCollectionId,
         [

@@ -32,19 +32,38 @@ export interface ExtendedTournamentRegistration extends TournamentRegistration {
 }
 
 class ParticipantManagementService {
-  private client: Client;
-  private databases: Databases;
+  private client: Client | null = null;
+  private databases: Databases | null = null;
   private dbId: string;
   private collectionId: string;
 
-  constructor() {
-    // Initialize Appwrite client
-    this.client = new Client()
-      .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || '')
-      .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || '')
-      .setKey(process.env.APPWRITE_API_KEY || '');
+  /**
+   * Lazily create the Appwrite client so importing this module does not
+   * require environment variables (e.g. during `next build`).
+   */
+  private getDatabases(): Databases {
+    if (!this.databases) {
+      const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
+      const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
 
-    this.databases = new Databases(this.client);
+      if (!endpoint || !projectId) {
+        throw new Error(
+          'Appwrite is not configured: NEXT_PUBLIC_APPWRITE_ENDPOINT and NEXT_PUBLIC_APPWRITE_PROJECT_ID are required'
+        );
+      }
+
+      this.client = new Client()
+        .setEndpoint(endpoint)
+        .setProject(projectId)
+        .setKey(process.env.APPWRITE_API_KEY || '');
+
+      this.databases = new Databases(this.client);
+    }
+
+    return this.databases;
+  }
+
+  constructor() {
     this.dbId = process.env.NEXT_PUBLIC_APPWRITE_DB_ID || '';
     this.collectionId = process.env.NEXT_PUBLIC_APPWRITE_TOURNAMENT_REGISTRATIONS_COLLECTION_ID || 'tournament_registrations';
   }
@@ -74,11 +93,11 @@ class ParticipantManagementService {
       // unique index on studentId is only dropped by a migration; we still
       // enforce scoping in application code.
       const [emailResult, studentResult] = await Promise.all([
-        this.databases.listDocuments(this.dbId, this.collectionId, [
+        this.getDatabases().listDocuments(this.dbId, this.collectionId, [
           Query.equal('tournamentId', tournamentId),
           Query.equal('email', email),
         ]),
-        this.databases.listDocuments(this.dbId, this.collectionId, [
+        this.getDatabases().listDocuments(this.dbId, this.collectionId, [
           Query.equal('studentId', studentId),
         ]),
       ]);
@@ -129,7 +148,7 @@ class ParticipantManagementService {
       let document: any;
 
       if (reusableDoc) {
-        document = await this.databases.updateDocument(
+        document = await this.getDatabases().updateDocument(
           this.dbId,
           this.collectionId,
           reusableDoc.$id,
@@ -137,7 +156,7 @@ class ParticipantManagementService {
         );
       } else {
         try {
-          document = await this.databases.createDocument(
+          document = await this.getDatabases().createDocument(
             this.dbId,
             this.collectionId,
             ID.unique(),
@@ -197,7 +216,7 @@ class ParticipantManagementService {
         return false;
       }
 
-      const result = await this.databases.listDocuments(
+      const result = await this.getDatabases().listDocuments(
         this.dbId,
         this.collectionId,
         [Query.equal('studentId', studentId.trim())]
@@ -234,7 +253,7 @@ class ParticipantManagementService {
    */
   async getById(id: string): Promise<TournamentParticipant | null> {
     try {
-      const document = await this.databases.getDocument(
+      const document = await this.getDatabases().getDocument(
         this.dbId,
         this.collectionId,
         id
@@ -265,7 +284,7 @@ class ParticipantManagementService {
    */
   async getAllRegistrations(): Promise<TournamentParticipant[]> {
     try {
-      const result = await this.databases.listDocuments(
+      const result = await this.getDatabases().listDocuments(
         this.dbId,
         this.collectionId
       );
@@ -302,7 +321,7 @@ class ParticipantManagementService {
     email: string
   ): Promise<TournamentParticipant | null> {
     try {
-      const result = await this.databases.listDocuments(
+      const result = await this.getDatabases().listDocuments(
         this.dbId,
         this.collectionId,
         [
@@ -355,7 +374,7 @@ class ParticipantManagementService {
       }
 
       // Get all documents for this tournament
-      const result = await this.databases.listDocuments(
+      const result = await this.getDatabases().listDocuments(
         this.dbId,
         this.collectionId,
         queries
@@ -443,7 +462,7 @@ class ParticipantManagementService {
       }
 
       // Update status in Appwrite
-      await this.databases.updateDocument(
+      await this.getDatabases().updateDocument(
         this.dbId,
         this.collectionId,
         id,
@@ -508,7 +527,7 @@ class ParticipantManagementService {
    */
   async getCount(tournamentId: string): Promise<number> {
     try {
-      const result = await this.databases.listDocuments(
+      const result = await this.getDatabases().listDocuments(
         this.dbId,
         this.collectionId,
         [
@@ -529,7 +548,7 @@ class ParticipantManagementService {
    */
   async getActiveCount(tournamentId: string): Promise<number> {
     try {
-      const result = await this.databases.listDocuments(
+      const result = await this.getDatabases().listDocuments(
         this.dbId,
         this.collectionId,
         [
@@ -564,7 +583,7 @@ class ParticipantManagementService {
       }
 
       // Delete from Appwrite
-      await this.databases.deleteDocument(
+      await this.getDatabases().deleteDocument(
         this.dbId,
         this.collectionId,
         id
