@@ -231,6 +231,7 @@ export const RATE_LIMITS = {
   PUBLIC: { limit: 30, windowMs: 60 * 1000 },
   CONTACT: { limit: 10, windowMs: 60 * 1000 },
   NEWSLETTER: { limit: 5, windowMs: 60 * 1000 },
+  REGISTRATION: { limit: 10, windowMs: 60 * 1000 },
   AUTHENTICATED: { limit: 100, windowMs: 60 * 1000 },
   ADMIN: { limit: 200, windowMs: 60 * 1000 },
   UPLOAD: { limit: 10, windowMs: 60 * 1000 }

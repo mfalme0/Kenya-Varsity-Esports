@@ -7,11 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { useAuth } from '@/contexts/AuthContext';
-import { 
-  kenyanUniversities, 
-  universityHasBranches, 
-  getUniversityBranches 
-} from '@/types/universities';
+import { validateStudentId } from '@/lib/validation/studentId';
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import { listmonkClientService } from "@/lib/listmonk-client";
@@ -30,8 +26,6 @@ export const RegistrationFormSection = () => {
     password: '',
     repeatPassword: '',
     university: '',
-    branch: '',
-    institution: '',
     studentId: '',
     phoneNumber: '',
     acceptTerms: false,
@@ -42,7 +36,6 @@ export const RegistrationFormSection = () => {
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
-  const [availableBranches, setAvailableBranches] = useState<string[]>([]);
 
   const genderOptions = ["Male", "Female", "Other", "Prefer not to say"];
 
@@ -51,28 +44,12 @@ export const RegistrationFormSection = () => {
   }, []);
 
   useEffect(() => {
-    if (user) {
+    // Only redirect verified users away from the registration page. New
+    // registrations must be allowed to reach /verify-email.
+    if (user?.emailVerification) {
       router.push('/');
     }
   }, [user, router]);
-  
-   useEffect(() => {
-    if (formData.university && formData.university !== 'Other / Not Listed') {
-      handleInputChange('institution', 'N/A');
-      
-      // Update available branches when university changes
-      if (universityHasBranches(formData.university)) {
-        setAvailableBranches(getUniversityBranches(formData.university));
-      } else {
-        setAvailableBranches([]);
-        handleInputChange('branch', ''); // Clear branch if university doesn't have branches
-      }
-    } else if (formData.institution === 'N/A' && formData.university === 'Other / Not Listed') {
-      handleInputChange('institution', '');
-      setAvailableBranches([]);
-      handleInputChange('branch', '');
-    }
-  }, [formData.university]);
 
   const handleInputChange = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -92,28 +69,20 @@ export const RegistrationFormSection = () => {
     }
     if (!formData.password) {
       newErrors.password = 'Password is required';
-    } else if (formData.password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
+    } else if (formData.password.length < 8) {
+      newErrors.password = 'Password must be at least 8 characters';
     }
     if (formData.password !== formData.repeatPassword) newErrors.repeatPassword = 'Passwords do not match';
     
     // Conditional validation based on user type
     if (formData.user_type === 'participant') {
-      if (!formData.university) newErrors.university = 'University or institution is required for participants';
-      
-      // Validate branch selection if university has branches
-      if (availableBranches.length > 0 && !formData.branch) {
-        newErrors.branch = 'Please select a university branch';
+      if (!formData.university.trim()) {
+        newErrors.university = 'University or institution is required for participants';
       }
-      
-      // Validate custom institution if "Other" is selected
-      if (formData.university === 'Other / Not Listed' && !formData.institution.trim()) {
-        newErrors.institution = 'Please enter your institution name';
-      }
-      
-      // Validate student ID for university students
-      if (formData.university && formData.university !== 'Other / Not Listed' && !formData.studentId.trim()) {
-        newErrors.studentId = 'Student ID is required for verification';
+
+      const studentIdValidation = validateStudentId(formData.studentId);
+      if (!studentIdValidation.valid) {
+        newErrors.studentId = studentIdValidation.error || 'Please enter a valid student ID';
       }
     }
     
@@ -133,13 +102,6 @@ export const RegistrationFormSection = () => {
     setErrors({});
 
     try {
-      // Prepare university data with branch if applicable
-      const universityData = formData.university === 'Other / Not Listed' 
-        ? formData.institution 
-        : formData.branch 
-          ? `${formData.university} - ${formData.branch}`
-          : formData.university;
-
       const { error, user } = await signUp(
         formData.email,
         formData.password,
@@ -149,55 +111,36 @@ export const RegistrationFormSection = () => {
           username: formData.username,
           dob: formData.dob,
           gender: formData.gender,
-          university: universityData,
-          student_id: formData.studentId,
+          university: formData.university.trim(),
+          student_id: formData.studentId.trim(),
           phone_number: formData.phoneNumber,
           user_type: formData.user_type
         }
       );
 
       if (error) {
-        const errorMessage = (error as any)?.message || 'Registration failed. Please try again.';
-        if (errorMessage.includes('User already registered') || errorMessage.includes('already exists')) {
+        const typedError = error as Error & { code?: string; field?: string };
+        const errorMessage = typedError?.message || 'Registration failed. Please try again.';
+
+        if (typedError.code === 'STUDENT_ID_INVALID' || typedError.code === 'STUDENT_ID_TAKEN') {
+          setErrors({ studentId: errorMessage });
+        } else if (
+          typedError.code === 'ACCOUNT_EXISTS' ||
+          errorMessage.includes('User already registered') ||
+          errorMessage.includes('already exists')
+        ) {
           setErrors({ general: 'An account with this email already exists. Please sign in instead.' });
         } else {
           setErrors({ general: errorMessage });
         }
       } else if (user) {
-        // console.log('📝 User registration successful:', user);
-
-        // If registered as participant, send notification to admin
-        if (formData.user_type === 'participant') {
-          try {
-            // console.log('📧 Sending admin notification for participant...');
-            await fetch('/api/notifications/register', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                name: formData.username,
-                email: formData.email,
-                university: formData.university === 'Other / Not Listed' ? formData.institution : formData.university,
-                studentId: formData.studentId,
-                phone: formData.phoneNumber
-              }),
-            });
-            // console.log('✅ Admin notification sent');
-          } catch (notifyError) {
-            console.error('⚠️ Failed to send admin notification:', notifyError);
-          }
-        }
-
         // Sync to Listmonk only if user subscribed to newsletter
         if (formData.subscribeNewsletter) {
           try {
-            const university = formData.university === 'Other / Not Listed' ? formData.institution : formData.university;
-            
             await listmonkClientService.addContact({
               email: formData.email,
               fullname: formData.fullName,
-              university: university || 'Not specified',
+              university: formData.university.trim() || 'Not specified',
               student_id: formData.studentId,
               phone_number: formData.phoneNumber,
               subscribeNewsletter: true
@@ -206,15 +149,11 @@ export const RegistrationFormSection = () => {
             console.error('⚠️ Failed to sync to newsletter:', newsletterError);
             // Don't result in error for user, just log it
           }
-        } else {
-          // console.log('📧 User opted out of newsletter subscription');
         }
 
         // Send verification email
         try {
-          // console.log('📧 Sending verification email...');
           await resendVerificationEmail();
-          // console.log('✅ Verification email sent');
         } catch (emailError) {
           console.error('⚠️ Failed to send verification email:', emailError);
         }
@@ -329,31 +268,35 @@ export const RegistrationFormSection = () => {
             <Label className="font-['Hind',Helvetica] font-normal text-[#961c18] text-xl">I am registering as a:</Label>
             <div className="flex gap-6">
               <div className="flex items-center space-x-2">
-                <Checkbox 
-                  id="type-participant" 
-                  className="border-[#961c18]" 
-                  checked={formData.user_type === 'participant'} 
-                  onCheckedChange={(checked) => {
-                    if (checked) handleInputChange('user_type', 'participant');
-                  }} 
+                <input
+                  type="radio"
+                  id="type-participant"
+                  name="user_type"
+                  value="participant"
+                  checked={formData.user_type === 'participant'}
+                  onChange={() => handleInputChange('user_type', 'participant')}
+                  className="h-4 w-4 accent-[#961c18]"
+                  disabled={isLoading}
                 />
                 <Label htmlFor="type-participant" className="text-white cursor-pointer">Participant</Label>
               </div>
               <div className="flex items-center space-x-2">
-                <Checkbox 
-                  id="type-visitor" 
-                  className="border-[#961c18]" 
-                  checked={formData.user_type === 'visitor'} 
-                  onCheckedChange={(checked) => {
-                    if (checked) handleInputChange('user_type', 'visitor');
-                  }} 
+                <input
+                  type="radio"
+                  id="type-visitor"
+                  name="user_type"
+                  value="visitor"
+                  checked={formData.user_type === 'visitor'}
+                  onChange={() => handleInputChange('user_type', 'visitor')}
+                  className="h-4 w-4 accent-[#961c18]"
+                  disabled={isLoading}
                 />
                 <Label htmlFor="type-visitor" className="text-white cursor-pointer">Visitor</Label>
               </div>
             </div>
             {formData.user_type === 'participant' && (
               <p className="text-sm text-yellow-500/80 italic">
-                * Participant registration requires admin approval. You will need to provide your institution details.
+                * Participant accounts are approved automatically once your student ID is validated. You will need to provide your institution details.
               </p>
             )}
           </div>
@@ -394,11 +337,12 @@ export const RegistrationFormSection = () => {
                     padding: '0 12px', 
                     outline: 'none' 
                   }} 
-                  placeholder="Enter your student ID"
+                  placeholder="e.g. EMME/02052/2021"
+                  maxLength={30}
                   disabled={isLoading}
                 />
                 <p className="font-['Hind',Helvetica] font-normal text-[#961c18] text-xs">
-                  Your ID will be verified by admins before tournament participation is granted.
+                  Use the student ID issued by your institution. It must be unique to your account.
                 </p>
                 {errors.studentId && (<p className="text-red-400 text-sm">{errors.studentId}</p>)}
               </div>

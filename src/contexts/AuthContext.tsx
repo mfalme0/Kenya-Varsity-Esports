@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { Account, Client, Databases, Models, ID, Permission, Role } from 'appwrite';
+import { Account, Client, Databases, Models } from 'appwrite';
 
 // --- Appwrite Client Setup with lazy initialization ---
 let client: Client | null = null;
@@ -153,6 +153,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
       return null;
+    }
+  };
+
+  /**
+   * Distinguish a missing profile (404) from a transient fetch failure. Used
+   * during sign-in to recover accounts whose registration never completed.
+   */
+  const isProfileMissing = async (userId: string): Promise<boolean> => {
+    try {
+      const appwrite = initializeAppwrite();
+      if (!appwrite) return false;
+
+      await appwrite.databases.getDocument(
+        process.env.NEXT_PUBLIC_APPWRITE_DB_ID!,
+        process.env.NEXT_PUBLIC_APPWRITE_PROFILE_COLLECTION_ID!,
+        userId
+      );
+      return false;
+    } catch (error) {
+      return (error as { code?: number }).code === 404;
     }
   };
 
@@ -387,6 +407,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         setUser(currentUser);
         const userProfile = await getProfile(currentUser.$id);
+
+        // An account without a profile means a previous registration failed
+        // after the account was created. Sign the user back out and send them
+        // to registration, which will repair the account safely.
+        if (!userProfile && (await isProfileMissing(currentUser.$id))) {
+          try {
+            await appwrite.account.deleteSession('current');
+          } catch {
+            // Session may already be gone.
+          }
+
+          setUser(null);
+          setProfile(null);
+
+          return {
+            error: new Error(
+              'Your account registration was not completed. Please sign up again with the same email to finish setting it up.'
+            ),
+          };
+        }
+
         setProfile(userProfile);
         
         // Create JWT for server bridge now that we have a valid session
@@ -511,42 +552,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     userData: Omit<AppwriteProfile, '$id' | '$createdAt' | '$updatedAt' | '$collectionId' | '$permissions'>
   ) => {
     try {
-      const appwrite = initializeAppwrite();
-      if (!appwrite) {
-        return { error: new Error('Appwrite not configured') };
-      }
-
-      // First create the user account
-      const newUser = await appwrite.account.create(ID.unique(), email, password);
-      
-      // Create a session for the new user so they can create their profile
-      await appwrite.account.createEmailPasswordSession(email, password);
-
-      // Set session cookie via JWT
-      try {
-        const jwtResponse = await appwrite.account.createJWT();
-        document.cookie = `appwrite-session=${jwtResponse.jwt}; path=/; max-age=${60 * 60 * 24}; SameSite=Lax`;
-      } catch (e) {
-        // ignore
-      }
-
-      // Create the profile document (permissions will be handled by collection settings)
-      const profileDoc = await appwrite.databases.createDocument(
-        process.env.NEXT_PUBLIC_APPWRITE_DB_ID!,
-        process.env.NEXT_PUBLIC_APPWRITE_PROFILE_COLLECTION_ID!,
-        newUser.$id,
-        {
-          ...userData,
-          isAdmin: false, // Default to non-admin
+      // Account and profile are created atomically by the server. This avoids
+      // orphaned accounts when profile creation fails after account creation.
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          password,
+          fullname: userData.fullname,
+          username: userData.username || '',
+          dob: userData.dob || '',
+          gender: userData.gender || '',
+          university: userData.university || '',
+          student_id: userData.student_id || '',
+          phone_number: userData.phone_number || '',
           user_type: userData.user_type || 'visitor',
-          status: userData.user_type === 'participant' ? 'pending' : 'approved'
-        }
-      );
+        }),
+      });
 
-      setUser(newUser);
-      setProfile(profileDoc as unknown as AppwriteProfile);
+      const result = await response.json().catch(() => null);
 
-      return { user: newUser };
+      if (!response.ok || !result?.success) {
+        const error = new Error(
+          result?.message || 'Registration failed. Please try again.'
+        ) as Error & { code?: string; field?: string };
+        error.code = result?.code;
+        error.field = result?.field;
+        return { error };
+      }
+
+      // Registration succeeded. Create the browser session and load the
+      // freshly created profile so the rest of the app can use it.
+      const signInResult = await signIn(email, password);
+
+      if (signInResult.error || !signInResult.user) {
+        const error = new Error(
+          'Your account was created, but we could not sign you in automatically. Please sign in to continue.'
+        ) as Error & { code?: string };
+        error.code = 'SIGN_IN_FAILED';
+        return { error };
+      }
+
+      return { user: signInResult.user };
     } catch (error) {
       if (process.env.NODE_ENV === 'development') {
         console.error('Sign up error:', error);
