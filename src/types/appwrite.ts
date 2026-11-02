@@ -6,6 +6,9 @@ export type AppwriteProfile = {
   $permissions: string[];
   fullname: string;
   email: string;
+  username?: string;
+  dob?: string;
+  gender?: string;
   university?: string;
   student_id?: string;
   phone_number?: string;

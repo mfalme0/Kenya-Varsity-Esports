@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 // This hook will now provide the password reset functions
 import { useAuth } from '@/contexts/AuthContext';
 
-export const LoginSection = () => {
+export const LoginSection = ({ redirectTo = '/' }: { redirectTo?: string }) => {
   // Destructuring the correct functions from the AuthContext
   const { signIn, user, sendPasswordResetEmail } = useAuth();
   const router = useRouter();
@@ -61,7 +61,7 @@ export const LoginSection = () => {
     } else if (signedInUser && !signedInUser.emailVerification) {
       router.push('/verify-email');
     } else {
-      router.push('/');
+      router.push(redirectTo);
     }
     setIsLoading(false);
   };

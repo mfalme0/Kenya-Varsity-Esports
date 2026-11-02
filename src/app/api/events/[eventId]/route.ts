@@ -205,6 +205,7 @@ export async function GET(
         event = {
           ...toEvent(t),
           ...ticketInfo,
+          ticketStartingPrice: ticketInfo.startingPrice,
         };
         isExternal = false;
       }
@@ -226,6 +227,7 @@ export async function GET(
           event = {
             ...toExternalEvent(e),
             ...ticketInfo,
+            ticketStartingPrice: ticketInfo.startingPrice,
           };
           isExternal = true;
         }

@@ -207,10 +207,8 @@ export async function approveRegistration(
           totalMembers,
         },
         [
-          Permission.read(Role.any()),
-          Permission.update(Role.users()),
+          Permission.read(Role.users()),
           Permission.update(Role.team('admins')),
-          Permission.delete(Role.users()),
           Permission.delete(Role.team('admins')),
         ]
       );
@@ -272,6 +270,44 @@ export async function approveRegistration(
       if (!registration.email) {
         console.warn(`⚠️ No email address found for registration ${registrationId}. Skipping email notification.`);
       }
+    }
+  }
+
+  // Rejection email — notify the applicant that their registration was declined.
+  if (status === 'rejected' && registration.email) {
+    const mailClient = getMailtrapClient();
+    const senderEmail = process.env.MAILTRAP_SENDER_EMAIL || 'no-reply@tunzaesports.com';
+    const title = args.tournamentTitle || 'Tournament';
+    if (mailClient) {
+      try {
+        await mailClient.send({
+          from: { email: senderEmail, name: 'KVE' },
+          to: [{ email: registration.email }],
+          subject: `Registration Update - ${title}`,
+          html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+                  <div style="background-color: #961c18; padding: 20px; text-align: center;">
+                      <h1 style="color: white; margin: 0;">Registration Update</h1>
+                  </div>
+                  <div style="padding: 20px; border: 1px solid #ddd; border-top: none;">
+                      <p>Hi <strong>${registration.playerName}</strong>,</p>
+                      <p>Thank you for your interest in <strong>${title}</strong>.</p>
+                      <p>After review, we are unable to approve your registration at this time.</p>
+                      <p>If you believe this is in error, or would like to apply for another tournament, please reach out to us.</p>
+                      <p>Best regards,<br/><strong>KVE Team</strong></p>
+                  </div>
+                  <div style="text-align: center; padding: 20px; font-size: 12px; color: #999;">
+                      <p>© ${new Date().getFullYear()} KVE. All rights reserved.</p>
+                  </div>
+              </div>
+          `,
+        });
+        console.log(`📧 Rejection email sent to ${registration.email}`);
+      } catch (mailError) {
+        console.error('❌ Error sending rejection email:', mailError);
+      }
+    } else {
+      console.warn('⚠️ Mailtrap client not initialized. Skipping rejection email.');
     }
   }
 

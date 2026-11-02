@@ -37,7 +37,7 @@ async function setupEventTicketCollections() {
         EVENT_TICKETS_COLLECTION_ID,
         'Event Tickets',
         [
-          Permission.read(Role.any()),
+          Permission.read(Role.users()),
           Permission.create(Role.users()),
           Permission.create(Role.team('admins')),
           Permission.update(Role.users()),
@@ -143,7 +143,7 @@ async function setupEventTicketCollections() {
         EVENT_TICKET_TYPES_COLLECTION_ID,
         'Event Ticket Types',
         [
-          Permission.read(Role.any()),
+          Permission.read(Role.users()),
           Permission.create(Role.users()),
           Permission.create(Role.team('admins')),
           Permission.update(Role.users()),
@@ -249,11 +249,9 @@ async function setupEventTicketCollections() {
         EVENT_TICKET_PURCHASES_COLLECTION_ID,
         'Event Ticket Purchases',
         [
-          Permission.read(Role.users()),
+          Permission.read(Role.team('admins')),
           Permission.create(Role.users()),
-          Permission.update(Role.users()),
           Permission.update(Role.team('admins')),
-          Permission.delete(Role.users()),
           Permission.delete(Role.team('admins'))
         ]
       );

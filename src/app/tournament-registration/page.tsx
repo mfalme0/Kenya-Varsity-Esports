@@ -19,7 +19,14 @@ interface Tournament {
   maxParticipants?: number;
   currentParticipants?: number;
   category?: string;
+  slug?: string;
   enableTickets?: boolean;
+  /** Set by the API when `?includeTickets=true` — entry-fee ticket config exists. */
+  hasTickets?: boolean;
+  /** Starting ticket price (base, before tax/service fee). */
+  ticketStartingPrice?: number;
+  ticketCurrency?: string;
+  ticketTaxRate?: number;
 }
 
 interface TicketNotice {
@@ -38,6 +45,15 @@ export default function TournamentRegistrationPage() {
   const [checkingCaptainStatus, setCheckingCaptainStatus] = useState(true);
   const [selectedTournament, setSelectedTournament] = useState<Tournament | null>(null);
   const [ticketNotice, setTicketNotice] = useState<TicketNotice | null>(null);
+  const [preselectedTournamentId, setPreselectedTournamentId] = useState<string | null>(null);
+
+  // Read ?tournament=<id> so links from event pages pre-select a tournament.
+  useEffect(() => {
+    const id = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('tournament')
+      : null;
+    setPreselectedTournamentId(id);
+  }, []);
 
   // Redirect if not logged in
   useEffect(() => {
@@ -66,8 +82,8 @@ export default function TournamentRegistrationPage() {
         // Fetch both registration_open tournaments AND upcoming ones
         // This allows showing upcoming tournaments that are available for registration
         const [regOpenRes, upcomingRes] = await Promise.all([
-          fetch('/api/tournaments?tournamentStatus=registration_open'),
-          fetch('/api/tournaments?tournamentStatus=upcoming')
+          fetch('/api/tournaments?tournamentStatus=registration_open&includeTickets=true'),
+          fetch('/api/tournaments?tournamentStatus=upcoming&includeTickets=true')
         ]);
         
         const regOpenResult = await regOpenRes.json();
@@ -106,6 +122,15 @@ export default function TournamentRegistrationPage() {
     }
   }, [user]);
 
+  const ticketPriceLabel = (tournament: Tournament | null) => {
+    if (!tournament) return null;
+    const price = tournament.ticketStartingPrice;
+    if (price == null) return null;
+    const currency = tournament.ticketCurrency || 'KES';
+    const tax = tournament.ticketTaxRate ? ` + ${tournament.ticketTaxRate}% tax` : '';
+    return `${currency} ${price.toLocaleString()}${tax}`;
+  };
+
   // Handle form submission via API
   const handleFormSubmit = async (formData: TournamentRegistrationFormData) => {
     if (!user || !profile) {
@@ -128,12 +153,8 @@ export default function TournamentRegistrationPage() {
         return;
       }
 
-      // Prepare API payload - combine players and substitutes into expected format
-      const teamData = {
-        players: formData.players || [],
-        substitutes: formData.substitutes || []
-      };
-      
+      // Prepare API payload - the backend expects JSON strings for the roster
+      // and game-specific fields.
       const apiPayload = {
         tournamentId: tournament.id,
         playerName: profile.fullname,
@@ -141,7 +162,11 @@ export default function TournamentRegistrationPage() {
         studentId: profile.student_id || '',
         university: profile.university || '',
         teamName: formData.teamName || undefined,
-        players: JSON.stringify(teamData), // Combined players + substitutes
+        players: JSON.stringify({
+          players: formData.players || [],
+          substitutes: formData.substitutes || [],
+        }),
+        gameSpecificFields: JSON.stringify(formData.gameSpecificFields || {}),
         additionalInfo: formData.additionalInfo || undefined,
         userId: user.$id,
       };
@@ -175,7 +200,9 @@ export default function TournamentRegistrationPage() {
       setTicketNotice(null);
       setMessage({ 
         type: 'success', 
-        text: 'Registration submitted successfully! Your registration is pending approval.' 
+        text: result.autoApproved
+          ? 'Registration submitted and approved! Your ticket check-in confirmed your spot.'
+          : 'Registration submitted successfully! Your registration is pending approval.' 
       });
 
     } catch (error) {
@@ -299,8 +326,8 @@ export default function TournamentRegistrationPage() {
                   {ticketNotice?.paymentPending
                     ? 'We are still waiting for your payment to be confirmed. Registration opens once your ticket is paid.'
                     : ticketNotice
-                      ? 'You must purchase a ticket for this tournament before your registration can be submitted.'
-                      : 'This tournament requires a ticket. Purchase yours before submitting your registration. Already bought one? You can continue below.'}
+                      ? `You must purchase a ticket for this tournament before your registration can be submitted. ${ticketPriceLabel(selectedTournament) ? `Entry fee: ${ticketPriceLabel(selectedTournament)}.` : ''} Already bought one? You can continue below.`
+                      : `This tournament requires a ticket. Purchase yours before submitting your registration. ${ticketPriceLabel(selectedTournament) ? `Entry fee: ${ticketPriceLabel(selectedTournament)}.` : ''} Already bought one? You can continue below.`}
                 </p>
               </div>
               <Link
@@ -354,6 +381,8 @@ export default function TournamentRegistrationPage() {
                 <TournamentRegistrationForm
                   onSubmit={handleFormSubmit}
                   tournaments={tournaments}
+                  initialTournamentId={preselectedTournamentId}
+                  captainStudentId={profile?.student_id || undefined}
                   onTournamentChange={(tournament) => {
                     setSelectedTournament(tournament);
                     setTicketNotice(null);
